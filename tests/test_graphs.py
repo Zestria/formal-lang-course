@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch
 
 from project.graphs import (
     get_graph_info_from_cfpq_data,
-    create_and_save_two_cycles_graph
+    create_and_save_two_cycles_graph,
 )
 
 

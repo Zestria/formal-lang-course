@@ -19,7 +19,7 @@ def get_graph_info_from_cfpq_data(name: str) -> GraphInfo:
     return GraphInfo(
         nodes_num=graph.number_of_nodes(),
         edges_num=graph.number_of_edges(),
-        labels=set(cfpq_data.get_sorted_labels(graph))
+        labels=set(cfpq_data.get_sorted_labels(graph)),
     )
 
 
@@ -27,13 +27,11 @@ def create_and_save_two_cycles_graph(
     first_cycle_nodes: int,
     second_cycle_nodes: int,
     labels: tuple[str, str],
-    output_path: str | Path
+    output_path: str | Path,
 ) -> None:
     """Generates a two-cycles graph with given parameters and saves it to a DOT file."""
     graph = cfpq_data.labeled_two_cycles_graph(
-        n=first_cycle_nodes,
-        m=second_cycle_nodes,
-        labels=labels
+        n=first_cycle_nodes, m=second_cycle_nodes, labels=labels
     )
 
     file_path = Path(output_path)
