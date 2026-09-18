@@ -12,7 +12,7 @@ from project.graphs import (
 
 def test_get_graph_info_isolated() -> None:
     """Unit test with mocked cfpq_data calls (isolated from network and filesystem)."""
-    with patch("graph_tools.cfpq_data") as mock_cfpq_data:
+    with patch("project.graphs.cfpq_data") as mock_cfpq_data:
         # Arrange
         mock_graph = MagicMock()
         mock_graph.number_of_nodes.return_value = 10

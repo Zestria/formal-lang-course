@@ -1,11 +1,11 @@
-from dataclasses import dataclass
 from pathlib import Path
+from typing import NamedTuple
 
 import cfpq_data
 import networkx as nx
 
-@dataclass
-class GraphInfo:
+
+class GraphInfo(NamedTuple):
     nodes_num: int
     edges_num: int
     labels: set[str]
