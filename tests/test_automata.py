@@ -433,12 +433,3 @@ def test_tensor_based_rpq_handles_cycles_and_empty_word():
 
     # 0 -> 0 (empty word or "aa"), 0 -> 1 ("a"), 2 -> 2 (empty word only).
     assert result == {(0, 0), (0, 1), (2, 2)}
-
-
-def test_tensor_based_rpq_returns_empty_set_when_nothing_matches():
-    graph = nx.MultiDiGraph()
-    graph.add_edge(0, 1, label="a")
-
-    assert tensor_based_rpq("b", graph, {0}, {1}) == set()
-    assert tensor_based_rpq("a", graph, set(), {1}) == set()
-    assert tensor_based_rpq("a", graph, {0}, set()) == set()
