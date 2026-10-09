@@ -10,7 +10,7 @@ from pyformlang.finite_automaton import (
     Symbol,
 )
 from pyformlang.regular_expression import Regex
-from scipy.sparse import csr_matrix, kron
+from scipy.sparse import csr_matrix, kron, eye, vstack
 
 
 def regex_to_dfa(regex: str) -> DeterministicFiniteAutomaton:
@@ -261,4 +261,72 @@ def tensor_based_rpq(
                 graph_start = graph_fa.index_to_state[start // regex_size].value
                 graph_final = graph_fa.index_to_state[final // regex_size].value
                 result.add((graph_start, graph_final))
+    return result
+
+
+def ms_bfs_based_rpq(
+    regex: str,
+    graph: MultiDiGraph,
+    start_nodes: set[int],
+    final_nodes: set[int],
+) -> set[tuple[int, int]]:
+    """Executes a regular path query on a labeled graph via multiple source BFS."""
+
+    all_nodes = set(graph.nodes)
+
+    start_nodes = set(start_nodes) & all_nodes if start_nodes else all_nodes
+    final_nodes = set(final_nodes) & all_nodes if final_nodes else all_nodes
+
+    graph_fa = AdjacencyMatrixFA(graph_to_nfa(graph, start_nodes, final_nodes))
+    regex_fa = AdjacencyMatrixFA(regex_to_dfa(regex))
+
+    graph_size = graph_fa.num_states
+    regex_size = regex_fa.num_states
+    sources = sorted(graph_fa.start_states)
+    if not sources or not regex_size:
+        return set()
+
+    # The front holds one block of regex_size rows per source vertex:
+    # entry (block * regex_size + q, v) means "v is reached in regex state q".
+    blocks = []
+    for source in sources:
+        rows = list(regex_fa.start_states)
+        block = csr_matrix(
+            ([True] * len(rows), (rows, [source] * len(rows))),
+            shape=(regex_size, graph_size),
+            dtype=bool,
+        )
+        blocks.append(block)
+    front = vstack(blocks, format="csr").astype(bool)
+    visited = front.copy()
+
+    # Transposed regex transitions applied to every block at once.
+    common_symbols = (
+        graph_fa.adjacency_matrices.keys() & regex_fa.adjacency_matrices.keys()
+    )
+    block_identity = eye(len(sources), dtype=bool, format="csr")
+    regex_steps = {
+        symbol: kron(
+            block_identity, regex_fa.adjacency_matrices[symbol].T, format="csr"
+        ).astype(bool)
+        for symbol in common_symbols
+    }
+
+    while front.nnz > 0:
+        step = csr_matrix(front.shape, dtype=bool)
+        for symbol in common_symbols:
+            moved = (regex_steps[symbol] @ front) @ graph_fa.adjacency_matrices[symbol]
+            step = step.maximum(moved.astype(bool))
+
+        front = (step > visited).astype(bool)
+        visited = visited.maximum(front)
+
+    result: set[tuple[int, int]] = set()
+    for position, source in enumerate(sources):
+        graph_start = graph_fa.index_to_state[source].value
+        for regex_final in regex_fa.final_states:
+            row = visited.getrow(position * regex_size + regex_final)
+            for column in row.nonzero()[1]:
+                if column in graph_fa.final_states:
+                    result.add((graph_start, graph_fa.index_to_state[column].value))
     return result
