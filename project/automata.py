@@ -242,11 +242,6 @@ def tensor_based_rpq(
 ) -> set[tuple[int, int]]:
     """Executes a regular path query on a labeled graph."""
 
-    all_nodes = set(graph.nodes)
-
-    start_nodes = set(start_nodes) & all_nodes if start_nodes else all_nodes
-    final_nodes = set(final_nodes) & all_nodes if final_nodes else all_nodes
-
     graph_fa = AdjacencyMatrixFA(graph_to_nfa(graph, start_nodes, final_nodes))
     regex_fa = AdjacencyMatrixFA(regex_to_dfa(regex))
 
