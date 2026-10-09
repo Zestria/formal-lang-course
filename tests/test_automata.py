@@ -16,6 +16,7 @@ from project.automata import (
     intersect_automata,
     regex_to_dfa,
     tensor_based_rpq,
+    ms_bfs_based_rpq,
 )
 
 
@@ -433,3 +434,70 @@ def test_tensor_based_rpq_handles_cycles_and_empty_word():
 
     # 0 -> 0 (empty word or "aa"), 0 -> 1 ("a"), 2 -> 2 (empty word only).
     assert result == {(0, 0), (0, 1), (2, 2)}
+
+
+def test_ms_bfs_based_rpq_filters_by_start_final_and_regex():
+    graph = nx.MultiDiGraph()
+    graph.add_edge(0, 1, label="a")
+    graph.add_edge(1, 2, label="b")
+    graph.add_edge(2, 3, label="b")
+
+    result = ms_bfs_based_rpq("a b*", graph, {0, 1}, {1, 2, 3})
+
+    assert result == {(0, 1), (0, 2), (0, 3)}
+
+
+def test_ms_bfs_based_rpq_handles_cycles_and_empty_word():
+    graph = nx.MultiDiGraph()
+    graph.add_edge(0, 1, label="a")
+    graph.add_edge(1, 0, label="a")
+    graph.add_node(2)
+
+    result = ms_bfs_based_rpq("a*", graph, {0, 2}, {0, 1, 2})
+
+    assert result == {(0, 0), (0, 1), (2, 2)}
+
+
+def test_ms_bfs_based_rpq_single_start_node():
+    graph = _build_graph()
+
+    assert ms_bfs_based_rpq("a b", graph, {0}, {2}) == {(0, 2)}
+    assert ms_bfs_based_rpq("a b", graph, {1}, {2}) == set()
+
+
+def test_ms_bfs_based_rpq_without_common_symbols():
+    graph = _build_graph()
+
+    assert ms_bfs_based_rpq("x", graph, {0, 1}, {0, 1, 2}) == set()
+
+
+def test_ms_bfs_based_rpq_empty_sets_mean_all_nodes():
+    graph = _build_graph()
+
+    assert ms_bfs_based_rpq("a|b|c", graph, set(), set()) == {
+        (0, 1),
+        (1, 2),
+        (2, 0),
+    }
+
+
+def test_ms_bfs_based_rpq_matches_tensor_based_rpq():
+    rng = random.Random(2)
+    labels = ["a", "b", "c"]
+    regexes = ["a b*", "(a|b)* c", "a* b* c*", "(a b)*", "c a*"]
+
+    for _ in range(30):
+        size = rng.randint(1, 7)
+        graph = nx.MultiDiGraph()
+        graph.add_nodes_from(range(size))
+        for _ in range(rng.randint(0, 15)):
+            graph.add_edge(
+                rng.randrange(size), rng.randrange(size), label=rng.choice(labels)
+            )
+        start = {n for n in range(size) if rng.random() < 0.5}
+        final = {n for n in range(size) if rng.random() < 0.5}
+
+        for regex in regexes:
+            assert ms_bfs_based_rpq(regex, graph, start, final) == tensor_based_rpq(
+                regex, graph, start, final
+            )
