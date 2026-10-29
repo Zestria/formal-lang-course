@@ -24,26 +24,19 @@ def cfg_to_weak_normal_form(cfg: CFG) -> CFG:
     generates_epsilon = cfg.generate_epsilon()
     start_symbol = cfg.start_symbol
 
-    normalized = (
+    cnf = (
         cfg.remove_useless_symbols()
         .remove_epsilon()
         .eliminate_unit_productions()
         .remove_useless_symbols()
+        .to_normal_form()
     )
 
-    productions = normalized._get_productions_with_only_single_terminals()
-    productions = normalized._decompose_productions(productions)
-
-    new_productions = set(productions)
+    productions = set(cnf.productions)
     if generates_epsilon:
-        new_productions.add(Production(start_symbol, []))
+        productions.add(Production(start_symbol, []))
 
-    return CFG(
-        variables=normalized.variables,
-        terminals=normalized.terminals,
-        start_symbol=start_symbol,
-        productions=new_productions,
-    )
+    return CFG(start_symbol=start_symbol, productions=productions)
 
 
 def hellings_based_cfpq(
