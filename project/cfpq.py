@@ -5,6 +5,16 @@ from typing import Optional
 
 import networkx as nx
 from pyformlang.cfg import CFG, Production, Terminal, Variable
+from pyformlang.finite_automaton import NondeterministicFiniteAutomaton, State, Symbol
+from pyformlang.rsa import Box, RecursiveAutomaton
+from scipy.sparse import csr_matrix
+
+from project.automata import (
+    AdjacencyMatrixFA,
+    graph_to_nfa,
+    intersect_automata,
+    regex_to_dfa,
+)
 
 
 def cfg_to_weak_normal_form(cfg: CFG) -> CFG:
@@ -135,4 +145,150 @@ def hellings_based_cfpq(
         for source in start_nodes
         for target in final_nodes
         if (source, target) in start_relation
+    }
+
+
+def cfg_to_rsm(cfg: CFG) -> RecursiveAutomaton:
+    """Builds one box per variable, accepting its production bodies.
+
+    Each production becomes a separate NFA path; an empty body makes the
+    entry state final. Box construction determinizes and minimizes the NFA.
+    Variable transitions call other boxes, while terminals label graph edges.
+    No normal-form conversion or regular-expression escaping is needed.
+    """
+    if cfg.start_symbol is None:
+        return RecursiveAutomaton()
+
+    variables = cfg.variables | {cfg.start_symbol}
+    terminal_labels = {Symbol(terminal.value) for terminal in cfg.terminals}
+    labels = {
+        variable: (
+            Symbol((Variable, variable.value))
+            if Symbol(variable.value) in terminal_labels
+            else Symbol(variable.value)
+        )
+        for variable in variables
+    }
+    automata = {}
+    for variable in variables:
+        automaton = NondeterministicFiniteAutomaton()
+        automaton.add_start_state(0)
+        automata[variable] = automaton
+
+    for index, production in enumerate(cfg.productions):
+        automaton = automata[production.head]
+        source = State(0)
+        for position, symbol in enumerate(production.body):
+            target = State((index, position))
+            label = (
+                labels[symbol] if isinstance(symbol, Variable) else Symbol(symbol.value)
+            )
+            automaton.add_transition(source, label, target)
+            source = target
+        automaton.add_final_state(source)
+
+    boxes = {Box(automata[variable], labels[variable]) for variable in variables}
+    return RecursiveAutomaton(set(labels.values()), labels[cfg.start_symbol], boxes)
+
+
+def ebnf_to_rsm(ebnf: str) -> RecursiveAutomaton:
+    """Builds an RSM from rules ``Head -> regex`` with start symbol ``S``.
+
+    Bodies use pyformlang regex syntax: union ``|``, concatenation, Kleene
+    star ``*`` and epsilon ``$``. Repeated heads are joined by union. Each
+    body is converted by the regex-to-DFA function from task 2; symbols
+    matching rule heads are recursive calls, all others are terminals.
+    """
+    bodies: dict[str, list[str]] = {}
+    for line in ebnf.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        if "->" not in line:
+            raise ValueError("Expected an EBNF rule 'Head -> regex'")
+        head, body = line.split("->", 1)
+        head = head.strip()
+        if not head:
+            raise ValueError("An EBNF rule must have a nonempty head")
+        bodies.setdefault(head, []).append(f"({body.strip() or '$'})")
+
+    if "S" not in bodies:
+        raise ValueError("The EBNF grammar must define the start symbol S")
+    boxes = {Box(regex_to_dfa(" | ".join(body)), head) for head, body in bodies.items()}
+    return RecursiveAutomaton(set(bodies), "S", boxes)
+
+
+def tensor_based_cfpq(
+    rsm: RecursiveAutomaton,
+    graph: nx.DiGraph,
+    start_nodes: Optional[set[int]] = None,
+    final_nodes: Optional[set[int]] = None,
+) -> set[tuple[int, int]]:
+    """Solves all-pairs CFPQ by saturating graph relations for RSM boxes.
+
+    The disjoint union of box automata is intersected with the graph using
+    sparse Boolean Kronecker products. Its reflexive transitive closure
+    yields new nonterminal edges between box entries and exits. Iteration
+    stops when no relation grows. The reflexive part handles nullable boxes.
+
+    As in the previous query functions, None or an empty node filter means
+    all graph vertices. Filters apply only to the resulting endpoint pairs.
+    Neither the graph nor the RSM is modified.
+    """
+    if not graph or rsm.initial_label not in rsm.boxes:
+        return set()
+
+    # Qualifying states by their box prevents collisions between local IDs.
+    union = NondeterministicFiniteAutomaton()
+    for label, box in rsm.boxes.items():
+        for state in box.dfa.states:
+            union.states.add(State((label, state)))
+        for source, transitions in box.dfa.to_dict().items():
+            for symbol, target in transitions.items():
+                union.add_transition((label, source), symbol, (label, target))
+    rsm_fa = AdjacencyMatrixFA(union)
+    graph_fa = AdjacencyMatrixFA(graph_to_nfa(graph))
+    size = graph_fa.num_states
+    empty = csr_matrix((size, size), dtype=bool)
+
+    boundaries = {}
+    for label, box in rsm.boxes.items():
+        entries = {
+            rsm_fa.state_to_index[State((label, state))]
+            for state in box.dfa.start_states
+        }
+        exits = {
+            rsm_fa.state_to_index[State((label, state))]
+            for state in box.dfa.final_states
+        }
+        boundaries[label] = (entries, exits)
+        # A box label denotes a call, not a terminal present in the graph.
+        graph_fa.adjacency_matrices[label] = empty.copy()
+
+    changed = True
+    while changed:
+        changed = False
+        product = intersect_automata(rsm_fa, graph_fa)
+        reachability = product._reachability_matrix()
+        for label, (entries, exits) in boundaries.items():
+            relation = graph_fa.adjacency_matrices[label]
+            previous_size = relation.nnz
+            for entry in entries:
+                for exit_state in exits:
+                    block = reachability[
+                        entry * size : (entry + 1) * size,
+                        exit_state * size : (exit_state + 1) * size,
+                    ]
+                    relation = relation.maximum(block)
+            graph_fa.adjacency_matrices[label] = relation
+            changed |= relation.nnz > previous_size
+
+    sources = start_nodes or set(graph.nodes)
+    targets = final_nodes or set(graph.nodes)
+    rows, columns = graph_fa.adjacency_matrices[rsm.initial_label].nonzero()
+    return {
+        (source, target)
+        for row, column in zip(rows, columns)
+        if (source := graph_fa.index_to_state[row].value) in sources
+        and (target := graph_fa.index_to_state[column].value) in targets
     }
